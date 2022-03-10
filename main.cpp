@@ -26,6 +26,26 @@ int main()
         if (display == nullptr)
             throw std::runtime_error("XOpenDisplay failed");
 
+        const Window displayWindow = DefaultRootWindow(display);
+        const int displayScreenIndex = DefaultScreen(display);
+
+        const Window window = XCreateSimpleWindow(
+            /* display      */ display,
+            /* parent       */ displayWindow,
+            /* x            */ 150,
+            /* y            */ 50,
+            /* width        */ 400,
+            /* height       */ 300,
+            /* border_width */ 5,
+            /* border       */ BlackPixel(display, displayScreenIndex),
+            /* background   */ WhitePixel(display, displayScreenIndex)
+        );
+
+        // Show window
+        XMapWindow(display, window);
+
+        XDestroyWindow(display, window);
+
         // XCloseDisplay returns int but there is no information about returned values,
         //   so the returned value is just ignored.
         XCloseDisplay(display);
@@ -38,4 +58,3 @@ int main()
 
     return 0;
 }
-

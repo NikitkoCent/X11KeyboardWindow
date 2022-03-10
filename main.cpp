@@ -14,6 +14,7 @@
 
 
 #include <X11/Xlib.h>
+#include <X11/Xatom.h>  // Atom, XInternAtom
 #include <exception>
 #include <iostream>
 
@@ -41,9 +42,45 @@ int main()
             /* background   */ WhitePixel(display, displayScreenIndex)
         );
 
+        // "Subscribes" to delete window message.
+        // Then received ClientMessage with attached wmDeleteMessage in the event loop (see below) will mean
+        //   user have closed the window.
+        Atom wmDeleteMessage = XInternAtom(display, "WM_DELETE_WINDOW", False);
+        if (const Status status = XSetWMProtocols(display, window, &wmDeleteMessage, 1); status == 0)
+        {
+            //throw std::runtime_error("XSetWMProtocols failed (tried to set WM_DELETE_WINDOW to False)");
+
+            // temporary solution until RAII wrappers are implemented
+            std::cerr << "XSetWMProtocols failed (tried to set WM_DELETE_WINDOW to False)" << std::endl;
+            goto temp_cleanup;
+        }
+
         // Show window
         XMapWindow(display, window);
 
+        // The event loop
+        // https://tronche.com/gui/x/xlib/event-handling/
+        bool shouldExit;
+        shouldExit = false;
+        do
+        {
+            XEvent event;
+            XNextEvent(display, &event);
+
+            switch (event.type)
+            {
+                case ClientMessage:
+                {
+                    if (static_cast<Atom>(event.xclient.data.l[0]) == wmDeleteMessage) {
+                        shouldExit = true;
+                    }
+                    break;
+                }
+            }
+        }
+        while (!shouldExit);
+
+    temp_cleanup:
         XDestroyWindow(display, window);
 
         // XCloseDisplay returns int but there is no information about returned values,

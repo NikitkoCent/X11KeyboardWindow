@@ -13,6 +13,7 @@
 //  limitations under the License.
 
 
+#include <X11/Xlib.h>
 #include <exception>
 #include <iostream>
 
@@ -21,6 +22,13 @@ int main()
 {
     try
     {
+        Display* const display = XOpenDisplay(nullptr);
+        if (display == nullptr)
+            throw std::runtime_error("XOpenDisplay failed");
+
+        // XCloseDisplay returns int but there is no information about returned values,
+        //   so the returned value is just ignored.
+        XCloseDisplay(display);
     }
     catch (const std::exception& err)
     {

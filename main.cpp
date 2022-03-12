@@ -23,12 +23,7 @@
 namespace logging
 {
     template<typename... Ts>
-    std::ostream& myLogImpl(std::ostream& logStream, Ts&&... args)
-    {
-        std::ostringstream strStream;
-        [[maybe_unused]] const int dummy[sizeof...(Ts)] = {(strStream << std::forward<Ts>(args), 0)...};
-        return logStream << strStream.str();
-    }
+    std::ostream& myLogImpl(std::ostream& logStream, Ts&&... args);
 
     #define MY_LOG(...) logging::myLogImpl(std::cerr, __FILE__ ":", __LINE__, ": ", __VA_ARGS__, '\n')
 
@@ -39,7 +34,12 @@ namespace logging
         MY_LOG("    ...returned ", result);                             \
         return result;                                                  \
     }()
+
+    void logX11Event(const XKeyEvent& event);
+    void logX11Event(const XButtonEvent& event);
 }
+
+std::string XModifiersStateToString(decltype(XKeyEvent::state) state);
 
 
 int main()
@@ -78,6 +78,13 @@ int main()
             goto temp_cleanup;
         }
 
+        // Subscribe to keyboard and mouse events
+        MY_LOG_X11_CALL(XSelectInput(
+            display,
+            window,
+            KeyPressMask | KeyReleaseMask | KeymapStateMask | ButtonPressMask | ButtonReleaseMask
+        ));
+
         // Show window
         MY_LOG_X11_CALL(XMapWindow(display, window));
 
@@ -104,6 +111,37 @@ int main()
                     }
                     break;
                 }
+                case KeymapNotify:
+                {
+                    MY_LOG("KeymapNotify EVENT");
+                    break;
+                }
+                // https://tronche.com/gui/x/xlib/events/keyboard-pointer/keyboard-pointer.html
+                // https://tronche.com/gui/x/xlib/input/keyboard-encoding.html
+                case KeyPress:
+                {
+                    MY_LOG("KeyPress EVENT");
+                    logging::logX11Event(event.xkey);
+                    break;
+                }
+                case KeyRelease:
+                {
+                    MY_LOG("KeyRelease EVENT");
+                    logging::logX11Event(event.xkey);
+                    break;
+                }
+                case ButtonPress:
+                {
+                    MY_LOG("ButtonPress EVENT");
+                    logging::logX11Event(event.xbutton);
+                    break;
+                }
+                case ButtonRelease:
+                {
+                    MY_LOG("ButtonRelease EVENT");
+                    logging::logX11Event(event.xbutton);
+                    break;
+                }
             }
         }
         while (!shouldExit);
@@ -122,4 +160,103 @@ int main()
     }
 
     return 0;
+}
+
+
+namespace logging
+{
+    template<typename... Ts>
+    std::ostream& myLogImpl(std::ostream& logStream, Ts&&... args)
+    {
+        std::ostringstream strStream;
+        [[maybe_unused]] const int dummy[sizeof...(Ts)] = {(strStream << std::forward<Ts>(args), 0)...};
+        return logStream << strStream.str();
+    }
+
+    void logX11Event(const XKeyEvent& event)
+    {
+        const auto eventTypeStr = (event.type == KeyPress) ? "KeyPress"
+                                   : (event.type == KeyRelease) ? "KeyRelease"
+                                   : "<Unknown>";
+
+        myLogImpl(std::cerr, "event@", &event, ": \n",
+                             "         type: ", eventTypeStr, " (", event.type, ")", "\n",
+                             "       serial: ", event.serial, "\n",
+                             "   send_event: ", event.send_event ? "true" : "false", "\n",
+                             "      display: ", event.display, "\n",
+                             "       window: ", event.window, "\n",
+                             "         root: ", event.root, "\n",
+                             "    subwindow: ", event.subwindow, "\n",
+                             "         time: ", event.time, " ms.", "\n",
+                             "            x: ", event.x, "\n",
+                             "            y: ", event.y, "\n",
+                             "       x_root: ", event.x_root, "\n",
+                             "       y_root: ", event.y_root, "\n",
+                             "        state: ", event.state, " (", XModifiersStateToString(event.state), ")", "\n",
+                             "      keycode: ", event.keycode, "\n",
+                             "  same_screen: ", event.same_screen ? "true" : "false",
+                             "\n"
+        );
+    }
+
+    void logX11Event(const XButtonEvent& event)
+    {
+        const auto eventTypeStr = (event.type == ButtonPress) ? "ButtonPress"
+                                   : (event.type == ButtonRelease) ? "ButtonRelease"
+                                   : "<Unknown>";
+
+        myLogImpl(std::cerr, "event@", &event, ": \n",
+                             "         type: ", eventTypeStr, " (", event.type, ")", "\n",
+                             "       serial: ", event.serial, "\n",
+                             "   send_event: ", event.send_event ? "true" : "false", "\n",
+                             "      display: ", event.display, "\n",
+                             "       window: ", event.window, "\n",
+                             "         root: ", event.root, "\n",
+                             "    subwindow: ", event.subwindow, "\n",
+                             "         time: ", event.time, " ms.", "\n",
+                             "            x: ", event.x, "\n",
+                             "            y: ", event.y, "\n",
+                             "       x_root: ", event.x_root, "\n",
+                             "       y_root: ", event.y_root, "\n",
+                             "        state: ", event.state, " (", XModifiersStateToString(event.state), ")", "\n",
+                             "       button: ", event.button, "\n",
+                             "  same_screen: ", event.same_screen ? "true" : "false",
+                             "\n"
+        );
+    }
+}
+
+
+std::string XModifiersStateToString(const decltype(XKeyEvent::state) state)
+{
+    std::string result = "[";
+
+    if ( (state & Button1Mask) == Button1Mask )
+        result += result.length() < 2 ? "Button1" : ", Button1";
+    if ( (state & Button2Mask) == Button2Mask )
+        result += result.length() < 2 ? "Button2" : ", Button2";
+    if ( (state & Button3Mask) == Button3Mask )
+        result += result.length() < 2 ? "Button3" : ", Button3";
+    if ( (state & Button4Mask) == Button4Mask )
+        result += result.length() < 2 ? "Button4" : ", Button4";
+    if ( (state & Button5Mask) == Button5Mask )
+        result += result.length() < 2 ? "Button5" : ", Button5";
+    if ( (state & ShiftMask) == ShiftMask )
+        result += result.length() < 2 ? "Shift" : ", Shift";
+    if ( (state & LockMask) == LockMask )
+        result += result.length() < 2 ? "Lock" : ", Lock";
+    if ( (state & ControlMask) == ControlMask )
+        result += result.length() < 2 ? "Control" : ", Control";
+    if ( (state & Mod1Mask) == Mod1Mask )
+        result += result.length() < 2 ? "Mod1" : ", Mod1";
+    if ( (state & Mod2Mask) == Mod2Mask )
+        result += result.length() < 2 ? "Mod2" : ", Mod2";
+    if ( (state & Mod3Mask) == Mod3Mask )
+        result += result.length() < 2 ? "Mod3" : ", Mod3";
+    if ( (state & Mod4Mask) == Mod4Mask )
+        result += result.length() < 2 ? "Mod4" : ", Mod4";
+    if ( (state & Mod5Mask) == Mod5Mask )
+        result += result.length() < 2 ? "Mod5" : ", Mod5";
+
+    return result += ']';
 }

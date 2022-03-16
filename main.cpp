@@ -18,6 +18,10 @@
 #include <exception>    // std::exception
 #include <iostream>     // std::cerr
 #include <sstream>      // std::ostringstream
+#include <functional>   // std::function
+#include <utility>      // std::move, std::forward
+#include <optional>     // std::optional
+#include <type_traits>  // std::is_trivially_destructible_v
 
 
 namespace logging
@@ -42,41 +46,103 @@ namespace logging
 std::string XModifiersStateToString(decltype(XKeyEvent::state) state);
 
 
+template<typename T>
+class XRAIIWrapper
+{
+    static_assert( std::is_trivially_destructible_v<T> );
+
+public:
+    template<typename CustomDeleter>
+    XRAIIWrapper(T&& resource, CustomDeleter&& deleter)
+        : impl_{ std::in_place, std::move(resource), std::forward<CustomDeleter>(deleter) }
+    {}
+
+    XRAIIWrapper(T&& resource)
+        : XRAIIWrapper(std::move(resource), nullptr)
+    {}
+
+    XRAIIWrapper(const XRAIIWrapper&) = delete;
+    XRAIIWrapper(XRAIIWrapper&&) = default;
+
+    ~XRAIIWrapper()
+    {
+        reset();
+    }
+
+public:
+    XRAIIWrapper& operator=(const XRAIIWrapper&) = delete;
+    XRAIIWrapper& operator=(XRAIIWrapper&& rhs)
+    {
+        if (&rhs != this)
+        {
+            reset();
+            impl_ = std::move(rhs.impl_);
+        }
+
+        return *this;
+    }
+
+public:
+    T& getResource() { return impl_.value().first; }
+    [[nodiscard]] const T& getResource() const { return impl_.value().first; }
+
+    operator const T&() const { return impl_.value().first; }
+
+    template<typename R>
+    explicit operator R() const { return (R)impl_.value().first; }
+
+private:
+    void reset()
+    {
+        if (impl_.has_value())
+        {
+            auto& deleter = impl_->second;
+            if (deleter)
+                deleter(impl_->first);
+            impl_.reset();
+        }
+    }
+
+private:
+    std::optional< std::pair<T, std::function<void(T&)>> > impl_;
+};
+
+
 int main()
 {
     try
     {
-        Display* const display = MY_LOG_X11_CALL(XOpenDisplay(nullptr));
+        const XRAIIWrapper<Display*> display{
+            MY_LOG_X11_CALL(XOpenDisplay(nullptr)),
+            [](auto& d){ if (d != nullptr) MY_LOG_X11_CALL(XCloseDisplay(d)); }
+        };
         if (display == nullptr)
             throw std::runtime_error("XOpenDisplay failed");
 
-        const Window displayWindow = MY_LOG_X11_CALL(DefaultRootWindow(display));
+        const XRAIIWrapper<Window> displayWindow = MY_LOG_X11_CALL(DefaultRootWindow(display));
         const int displayScreenIndex = MY_LOG_X11_CALL(DefaultScreen(display));
 
-        const Window window = MY_LOG_X11_CALL(XCreateSimpleWindow(
-            /* display      */ display,
-            /* parent       */ displayWindow,
-            /* x            */ 150,
-            /* y            */ 50,
-            /* width        */ 400,
-            /* height       */ 300,
-            /* border_width */ 5,
-            /* border       */ BlackPixel(display, displayScreenIndex),
-            /* background   */ WhitePixel(display, displayScreenIndex)
-        ));
+        const XRAIIWrapper<Window> window{
+            MY_LOG_X11_CALL(XCreateSimpleWindow(
+                /* display      */ display,
+                /* parent       */ displayWindow,
+                /* x            */ 150,
+                /* y            */ 50,
+                /* width        */ 400,
+                /* height       */ 300,
+                /* border_width */ 5,
+                /* border       */ BlackPixel(display, displayScreenIndex),
+                /* background   */ WhitePixel(display, displayScreenIndex)
+            )),
+            [&](auto& w) { MY_LOG_X11_CALL(XDestroyWindow(display, w)); }
+        };
 
         // "Subscribes" to delete window message.
         // Then received ClientMessage with attached wmDeleteMessage in the event loop (see below) will mean
         //   user have closed the window.
         Atom wmDeleteMessage = MY_LOG_X11_CALL(XInternAtom(display, "WM_DELETE_WINDOW", False));
         if (const Status status = MY_LOG_X11_CALL(XSetWMProtocols(display, window, &wmDeleteMessage, 1)); status == 0)
-        {
-            //throw std::runtime_error("XSetWMProtocols failed (tried to set WM_DELETE_WINDOW to False)");
-
-            // temporary solution until RAII wrappers are implemented
-            std::cerr << "XSetWMProtocols failed (tried to set WM_DELETE_WINDOW to False)" << std::endl;
-            goto temp_cleanup;
-        }
+            throw std::runtime_error("XSetWMProtocols failed (tried to set WM_DELETE_WINDOW to False)");
 
         // Subscribe to keyboard and mouse events
         MY_LOG_X11_CALL(XSelectInput(
@@ -92,8 +158,7 @@ int main()
 
         // The event loop
         // https://tronche.com/gui/x/xlib/event-handling/
-        bool shouldExit;
-        shouldExit = false;
+        bool shouldExit = false;
         do
         {
             XEvent event;
@@ -145,13 +210,6 @@ int main()
             }
         }
         while (!shouldExit);
-
-    temp_cleanup:
-        MY_LOG_X11_CALL(XDestroyWindow(display, window));
-
-        // XCloseDisplay returns int but there is no information about returned values,
-        //   so the returned value is just ignored.
-        MY_LOG_X11_CALL(XCloseDisplay(display));
     }
     catch (const std::exception& err)
     {

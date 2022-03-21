@@ -15,12 +15,14 @@
 
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>  // Atom, XInternAtom
+#include <iostream>     // std::ostream, std::cerr
+#include <optional>     // std::optional
+#include <string>       // std::string
+#include <clocale>      // std::setlocale
 #include <exception>    // std::exception
-#include <iostream>     // std::cerr
 #include <sstream>      // std::ostringstream
 #include <functional>   // std::function
 #include <utility>      // std::move, std::forward
-#include <optional>     // std::optional
 #include <type_traits>  // std::is_trivially_destructible_v
 
 
@@ -39,11 +41,27 @@ namespace logging
         return result;                                                  \
     }()
 
+    #define MY_LOG_X11_CALL_VALUELESS(FUNC_CALL)                        \
+    [&] {                                                               \
+        MY_LOG(#FUNC_CALL, "...");                                      \
+        FUNC_CALL;                                                      \
+        MY_LOG("    ...finished.");                                     \
+    }()
+
     void logX11Event(const XKeyEvent& event);
     void logX11Event(const XButtonEvent& event);
 }
 
+
 std::string XModifiersStateToString(decltype(XKeyEvent::state) state);
+
+struct InputMethodText
+{
+    std::optional<KeySym> keySym;
+    std::optional<std::string> composedTextUtf8;
+
+    static InputMethodText obtainFrom(XIC imContext, XKeyPressedEvent& kpEvent);
+};
 
 
 template<typename T>
@@ -112,6 +130,19 @@ int main()
 {
     try
     {
+        // https://www.x.org/releases/X11R7.6/doc/libX11/specs/libX11/libX11.html#X_Locale_Management
+        const auto locale = MY_LOG_X11_CALL(std::setlocale(LC_CTYPE, ""));
+        if (locale == nullptr)
+            throw std::runtime_error("std::setlocale failed");
+        if (!MY_LOG_X11_CALL(XSupportsLocale()))
+            throw std::runtime_error(std::string("X11 does not support the current locale ") + locale);
+
+        // Set all X modifiers for the current locale to implementation-dependent defaults (of the current locale).
+        // The local host X locale modifiers announcer (on POSIX-compliant systems, the XMODIFIERS environment variable) is used.
+        // https://www.x.org/releases/X11R7.6/doc/libX11/specs/libX11/libX11.html#X_Locale_Management
+        if (MY_LOG_X11_CALL(XSetLocaleModifiers("")) == nullptr)
+            throw std::runtime_error("XSetLocaleModifiers failed");
+
         const XRAIIWrapper<Display*> display{
             MY_LOG_X11_CALL(XOpenDisplay(nullptr)),
             [](auto& d){ if (d != nullptr) MY_LOG_X11_CALL(XCloseDisplay(d)); }
@@ -151,6 +182,34 @@ int main()
             KeyPressMask | KeyReleaseMask | KeymapStateMask | ButtonPressMask | ButtonReleaseMask
         ));
 
+        // Initialize input methods
+        const XRAIIWrapper<XIM> inputMethod{
+            MY_LOG_X11_CALL(XOpenIM(display, nullptr, nullptr, nullptr)),
+            [](auto& xim) { if (xim != nullptr) MY_LOG_X11_CALL(XCloseIM(xim)); }
+        };
+        if (inputMethod == nullptr)
+            throw std::runtime_error("XOpenIM failed");
+
+        // Initialize input context.
+        // See
+        //   * https://www.x.org/releases/X11R7.6/doc/libX11/specs/libX11/libX11.html#Input_Context_Values;
+        //   * https://www.x.org/releases/X11R7.6/doc/libX11/specs/libX11/libX11.html#Query_Input_Style.
+        //   for the used flags.
+        const XRAIIWrapper<XIC> imContext{
+            MY_LOG_X11_CALL(XCreateIC(
+                inputMethod,
+                XNInputStyle, XIMPreeditNothing | XIMStatusNothing,
+                XNClientWindow, static_cast<Window>(window.getResource()),
+                nullptr
+            )),
+            [](auto& xic) { if (xic != nullptr) MY_LOG_X11_CALL_VALUELESS(XDestroyIC(xic)); }
+        };
+        if (imContext == nullptr)
+            throw std::runtime_error("XCreateIC failed");
+
+        // Set focus
+        MY_LOG_X11_CALL_VALUELESS(XSetICFocus(imContext));
+
         // Show window
         MY_LOG_X11_CALL(XMapWindow(display, window));
 
@@ -163,6 +222,11 @@ int main()
         {
             XEvent event;
             MY_LOG_X11_CALL(XNextEvent(display, &event));
+
+            // XFilterEvent returns True when some input method has filtered the event,
+            //   and the client should discard the event.
+            if (MY_LOG_X11_CALL(XFilterEvent(&event, None)))
+                continue;
 
             switch (event.type)
             {
@@ -187,6 +251,15 @@ int main()
                 {
                     MY_LOG("KeyPress EVENT");
                     logging::logX11Event(event.xkey);
+
+                    const auto [keySym, composedTextUtf8] =
+                    InputMethodText::obtainFrom(imContext.getResource(), event.xkey);
+
+                    if (keySym.has_value())
+                        logging::myLogImpl(std::cerr, "keySym: ", *keySym, "\n");
+                    if (composedTextUtf8.has_value())
+                        logging::myLogImpl(std::cerr, "composedText (UTF8): \"", *composedTextUtf8, "\"", "\n");
+
                     break;
                 }
                 case KeyRelease:
@@ -317,4 +390,51 @@ std::string XModifiersStateToString(const decltype(XKeyEvent::state) state)
         result += result.length() < 2 ? "Mod5" : ", Mod5";
 
     return result += ']';
+}
+
+InputMethodText InputMethodText::obtainFrom(XIC imContext, XKeyPressedEvent& kpEvent)
+{
+    std::string composedText;
+    KeySym keySym;
+    Status status;
+
+    composedText.resize(129, 0);
+
+    // https://opennet.ru/man.shtml?topic=XmbLookupString
+
+    int composedTextLengthBytes = MY_LOG_X11_CALL(Xutf8LookupString(
+        imContext,
+        &kpEvent,
+        composedText.data(),
+        composedText.size() - 1,
+        &keySym,
+        &status
+    ));
+    if (status == XBufferOverflow)
+    {
+        composedText.resize(composedTextLengthBytes + 1, 0);
+        composedTextLengthBytes = MY_LOG_X11_CALL(Xutf8LookupString(
+            imContext,
+            &kpEvent,
+            composedText.data(),
+            composedText.size() - 1,
+            &keySym,
+            &status
+        ));
+    }
+
+    composedText.resize(composedTextLengthBytes, 0);
+
+    switch (status) {
+        case XLookupNone:
+            return { std::nullopt, std::nullopt };
+        case XLookupChars:
+            return { std::nullopt, std::move(composedText) };
+        case XLookupKeySym:
+            return { keySym, std::nullopt };
+        case XLookupBoth:
+            return { keySym, std::move(composedText) };
+        default:
+            throw std::runtime_error("Xutf8LookupString: unknown status: " + std::to_string(status));
+    }
 }

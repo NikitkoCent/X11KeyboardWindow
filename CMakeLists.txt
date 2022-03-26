@@ -18,6 +18,7 @@ cmake_minimum_required(VERSION 3.14)
 project(X11KeyboardWindow CXX)
 
 find_package(X11 REQUIRED)
+find_package(Threads REQUIRED)
 
 add_executable(X11KeyboardWindow main.cpp)
 
@@ -38,4 +39,5 @@ endif()
 
 target_link_libraries(X11KeyboardWindow
     PRIVATE X11::X11
+    PRIVATE Threads::Threads
 )

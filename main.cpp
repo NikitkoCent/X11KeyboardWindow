@@ -54,23 +54,6 @@ namespace logging
 }
 
 
-std::string XModifiersStateToString(decltype(XKeyEvent::state) state);
-
-// Returns the maximum size of the preedit string
-static int PreeditStartCallback(XIC ic, XPointer client_data, XPointer call_data);
-static void PreeditDoneCallback(XIC ic, XPointer client_data, XPointer call_data);
-static void PreeditDrawCallback(XIC ic, XPointer client_data, XIMPreeditDrawCallbackStruct *call_data);
-static void PreeditCaretCallback(XIC ic, XPointer client_data, XIMPreeditCaretCallbackStruct *call_data);
-
-struct InputMethodText
-{
-    std::optional<KeySym> keySym;
-    std::optional<std::string> composedTextUtf8;
-
-    static InputMethodText obtainFrom(XIC imContext, XKeyPressedEvent& kpEvent);
-};
-
-
 template<typename T>
 class XRAIIWrapper
 {
@@ -130,6 +113,23 @@ private:
 
 private:
     std::optional< std::pair<T, std::function<void(T&)>> > impl_;
+};
+
+
+std::string XModifiersStateToString(decltype(XKeyEvent::state) state);
+
+// Returns the maximum size of the preedit string
+static int preeditStartCallback(XIC ic, XPointer client_data, XPointer call_data);
+static void preeditDoneCallback(XIC ic, XPointer client_data, XPointer call_data);
+static void preeditDrawCallback(XIC ic, XPointer client_data, XIMPreeditDrawCallbackStruct *call_data);
+static void preeditCaretCallback(XIC ic, XPointer client_data, XIMPreeditCaretCallbackStruct *call_data);
+
+struct InputMethodText
+{
+    std::optional<KeySym> keySym;
+    std::optional<std::string> composedTextUtf8;
+
+    static InputMethodText obtainFrom(XIC imContext, XKeyPressedEvent& kpEvent);
 };
 
 
@@ -199,10 +199,10 @@ int main()
 
         // Setup preedit callbacks
         XIMCallback preeditCallbacks[] = {
-            { nullptr, reinterpret_cast<XIMProc>((void*)&PreeditStartCallback)},
-            { nullptr, reinterpret_cast<XIMProc>(&PreeditDoneCallback)},
-            { nullptr, reinterpret_cast<XIMProc>(&PreeditDrawCallback)},
-            { nullptr, reinterpret_cast<XIMProc>(&PreeditCaretCallback)},
+            { nullptr, reinterpret_cast<XIMProc>((void*)&preeditStartCallback) },
+            { nullptr, reinterpret_cast<XIMProc>(&preeditDoneCallback) },
+            { nullptr, reinterpret_cast<XIMProc>(&preeditDrawCallback) },
+            { nullptr, reinterpret_cast<XIMProc>(&preeditCaretCallback) },
         };
         const XRAIIWrapper<XVaNestedList> preeditAttributes{
             MY_LOG_X11_CALL(XVaCreateNestedList(0,
@@ -253,7 +253,8 @@ int main()
 
             // XFilterEvent returns True when some input method has filtered the event,
             //   and the client should discard the event.
-            if (MY_LOG_X11_CALL(XFilterEvent(&event, None)))
+            [[maybe_unused]] const bool eventWasFiltered = MY_LOG_X11_CALL(XFilterEvent(&event, None));
+            if (eventWasFiltered)
                 continue;
 
             switch (event.type)
@@ -281,7 +282,7 @@ int main()
                     logging::logX11Event(event.xkey);
 
                     const auto [keySym, composedTextUtf8] =
-                    InputMethodText::obtainFrom(imContext.getResource(), event.xkey);
+                        InputMethodText::obtainFrom(imContext.getResource(), event.xkey);
 
                     if (keySym.has_value())
                         logging::myLogImpl(std::cerr, "    keySym: ", *keySym, "\n");
@@ -439,26 +440,26 @@ std::string XModifiersStateToString(const decltype(XKeyEvent::state) state)
 
 
 // Returns the maximum size of the preedit string
-static int PreeditStartCallback(XIC ic, XPointer client_data, XPointer call_data)
+static int preeditStartCallback(XIC ic, XPointer client_data, XPointer call_data)
 {
     (void)ic; (void)client_data; (void)call_data;
     MY_LOG(__func__, '(', ic, ", ", static_cast<void*>(client_data), ", ", static_cast<void*>(call_data), ')');
     return -1;
 }
 
-static void PreeditDoneCallback(XIC ic, XPointer client_data, XPointer call_data)
+static void preeditDoneCallback(XIC ic, XPointer client_data, XPointer call_data)
 {
     (void)ic; (void)client_data; (void)call_data;
     MY_LOG(__func__, '(', ic, ", ", static_cast<void*>(client_data), ", ", static_cast<void*>(call_data), ')');
 }
 
-static void PreeditDrawCallback(XIC ic, XPointer client_data, XIMPreeditDrawCallbackStruct* call_data)
+static void preeditDrawCallback(XIC ic, XPointer client_data, XIMPreeditDrawCallbackStruct* call_data)
 {
     (void)ic; (void)client_data; (void)call_data;
     MY_LOG(__func__, '(', ic, ", ", static_cast<void*>(client_data), ", ", static_cast<void*>(call_data), ')');
 }
 
-static void PreeditCaretCallback(XIC ic, XPointer client_data, XIMPreeditCaretCallbackStruct* call_data)
+static void preeditCaretCallback(XIC ic, XPointer client_data, XIMPreeditCaretCallbackStruct* call_data)
 {
     (void)ic; (void)client_data; (void)call_data;
     MY_LOG(__func__, '(', ic, ", ", static_cast<void*>(client_data), ", ", static_cast<void*>(call_data), ')');

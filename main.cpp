@@ -56,6 +56,12 @@ namespace logging
 
 std::string XModifiersStateToString(decltype(XKeyEvent::state) state);
 
+// Returns the maximum size of the preedit string
+static int PreeditStartCallback(XIC ic, XPointer client_data, XPointer call_data);
+static void PreeditDoneCallback(XIC ic, XPointer client_data, XPointer call_data);
+static void PreeditDrawCallback(XIC ic, XPointer client_data, XIMPreeditDrawCallbackStruct *call_data);
+static void PreeditCaretCallback(XIC ic, XPointer client_data, XIMPreeditCaretCallbackStruct *call_data);
+
 struct InputMethodText
 {
     std::optional<KeySym> keySym;
@@ -191,6 +197,26 @@ int main()
         if (inputMethod == nullptr)
             throw std::runtime_error("XOpenIM failed");
 
+        // Setup preedit callbacks
+        XIMCallback preeditCallbacks[] = {
+            { nullptr, reinterpret_cast<XIMProc>((void*)&PreeditStartCallback)},
+            { nullptr, reinterpret_cast<XIMProc>(&PreeditDoneCallback)},
+            { nullptr, reinterpret_cast<XIMProc>(&PreeditDrawCallback)},
+            { nullptr, reinterpret_cast<XIMProc>(&PreeditCaretCallback)},
+        };
+        const XRAIIWrapper<XVaNestedList> preeditAttributes{
+            MY_LOG_X11_CALL(XVaCreateNestedList(0,
+                XNPreeditStartCallback, &preeditCallbacks[0],
+                XNPreeditDoneCallback, &preeditCallbacks[1],
+                XNPreeditDrawCallback, &preeditCallbacks[2],
+                XNPreeditCaretCallback, &preeditCallbacks[3],
+                nullptr
+            )),
+            [](auto& list) { if (list != nullptr) MY_LOG_X11_CALL_VALUELESS(XFree(list)); }
+        };
+        if (preeditAttributes == nullptr)
+            throw std::runtime_error("XVaCreateNestedList failed");
+
         // Initialize input context.
         // See
         //   * https://www.x.org/releases/X11R7.6/doc/libX11/specs/libX11/libX11.html#Input_Context_Values;
@@ -199,7 +225,8 @@ int main()
         const XRAIIWrapper<XIC> imContext{
             MY_LOG_X11_CALL(XCreateIC(
                 inputMethod,
-                XNInputStyle, XIMPreeditNothing | XIMStatusNothing,
+                XNInputStyle, XIMPreeditCallbacks | XIMStatusNothing,
+                XNPreeditAttributes, preeditAttributes.getResource(),
                 XNClientWindow, static_cast<Window>(window.getResource()),
                 nullptr
             )),
@@ -409,6 +436,34 @@ std::string XModifiersStateToString(const decltype(XKeyEvent::state) state)
 
     return result += ']';
 }
+
+
+// Returns the maximum size of the preedit string
+static int PreeditStartCallback(XIC ic, XPointer client_data, XPointer call_data)
+{
+    (void)ic; (void)client_data; (void)call_data;
+    MY_LOG(__func__, '(', ic, ", ", static_cast<void*>(client_data), ", ", static_cast<void*>(call_data), ')');
+    return -1;
+}
+
+static void PreeditDoneCallback(XIC ic, XPointer client_data, XPointer call_data)
+{
+    (void)ic; (void)client_data; (void)call_data;
+    MY_LOG(__func__, '(', ic, ", ", static_cast<void*>(client_data), ", ", static_cast<void*>(call_data), ')');
+}
+
+static void PreeditDrawCallback(XIC ic, XPointer client_data, XIMPreeditDrawCallbackStruct* call_data)
+{
+    (void)ic; (void)client_data; (void)call_data;
+    MY_LOG(__func__, '(', ic, ", ", static_cast<void*>(client_data), ", ", static_cast<void*>(call_data), ')');
+}
+
+static void PreeditCaretCallback(XIC ic, XPointer client_data, XIMPreeditCaretCallbackStruct* call_data)
+{
+    (void)ic; (void)client_data; (void)call_data;
+    MY_LOG(__func__, '(', ic, ", ", static_cast<void*>(client_data), ", ", static_cast<void*>(call_data), ')');
+}
+
 
 InputMethodText InputMethodText::obtainFrom(XIC imContext, XKeyPressedEvent& kpEvent)
 {

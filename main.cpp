@@ -24,6 +24,7 @@
 #include <functional>   // std::function
 #include <utility>      // std::move, std::forward
 #include <type_traits>  // std::is_trivially_destructible_v
+#include <thread>       // std::thread, std::this_thread
 
 
 namespace logging
@@ -31,14 +32,14 @@ namespace logging
     template<typename... Ts>
     std::ostream& myLogImpl(std::ostream& logStream, Ts&&... args);
 
-    #define MY_LOG(...) logging::myLogImpl(std::cerr, __FILE__ ":", __LINE__, ": ", __VA_ARGS__, '\n')
+    #define MY_LOG(...) logging::myLogImpl(std::cerr, "[tid:", std::this_thread::get_id(), "] ", __FILE__ ":", __LINE__, ": ", __VA_ARGS__, '\n')
 
     #define MY_LOG_X11_CALL(FUNC_CALL)                                  \
     [&] {                                                               \
         MY_LOG(#FUNC_CALL, "...");                                      \
-        auto result = FUNC_CALL;                                        \
-        MY_LOG("    ...returned ", result);                             \
-        return result;                                                  \
+        auto result_local = FUNC_CALL;                                  \
+        MY_LOG("    ...returned ", result_local);                       \
+        return result_local;                                            \
     }()
 
     #define MY_LOG_X11_CALL_VALUELESS(FUNC_CALL)                        \
@@ -256,9 +257,9 @@ int main()
                     InputMethodText::obtainFrom(imContext.getResource(), event.xkey);
 
                     if (keySym.has_value())
-                        logging::myLogImpl(std::cerr, "keySym: ", *keySym, "\n");
+                        logging::myLogImpl(std::cerr, "    keySym: ", *keySym, "\n");
                     if (composedTextUtf8.has_value())
-                        logging::myLogImpl(std::cerr, "composedText (UTF8): \"", *composedTextUtf8, "\"", "\n");
+                        logging::myLogImpl(std::cerr, "    composedText (UTF8): \"", *composedTextUtf8, "\"", "\n");
 
                     break;
                 }
@@ -300,7 +301,24 @@ namespace logging
     std::ostream& myLogImpl(std::ostream& logStream, Ts&&... args)
     {
         std::ostringstream strStream;
-        [[maybe_unused]] const int dummy[sizeof...(Ts)] = {(strStream << std::forward<Ts>(args), 0)...};
+
+        const auto writer = [&strStream](auto&& value) -> int {
+            using WithoutCVRefs = std::remove_cv_t<std::remove_reference_t<decltype(value)>>;
+            if constexpr (std::is_pointer_v<WithoutCVRefs>)
+            {
+                if (std::forward<decltype(value)>(value) == nullptr)
+                {
+                    strStream << "<nullptr>";
+                    return 0;
+                }
+            }
+
+            strStream << std::forward<decltype(value)>(value);
+
+            return 0;
+        };
+
+        [[maybe_unused]] const int dummy[sizeof...(Ts)] = { writer(std::forward<Ts>(args))... };
         return logStream << strStream.str();
     }
 

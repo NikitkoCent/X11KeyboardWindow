@@ -118,6 +118,8 @@ private:
 
 std::string XModifiersStateToString(decltype(XKeyEvent::state) state);
 
+XRAIIWrapper<XIMStyles*> obtainSupportedInputStyles(XIM inputMethod) noexcept(false);
+
 // Returns the maximum size of the preedit string
 static int preeditStartCallback(XIC ic, XPointer client_data, XPointer call_data);
 static void preeditDoneCallback(XIC ic, XPointer client_data, XPointer call_data);
@@ -196,6 +198,8 @@ int main()
         };
         if (inputMethod == nullptr)
             throw std::runtime_error("XOpenIM failed");
+
+        [[maybe_unused]] const XRAIIWrapper supportedInputStyles = obtainSupportedInputStyles(inputMethod);
 
         // Setup preedit callbacks
         XIMCallback preeditCallbacks[] = {
@@ -438,6 +442,48 @@ std::string XModifiersStateToString(const decltype(XKeyEvent::state) state)
     return result += ']';
 }
 
+
+XRAIIWrapper<XIMStyles*> obtainSupportedInputStyles(XIM inputMethod) noexcept(false)
+{
+    XIMStyles* styles = nullptr;
+    if (const char* failedArg = MY_LOG_X11_CALL(XGetIMValues(inputMethod, XNQueryInputStyle, &styles, nullptr));
+            failedArg != nullptr)
+    {
+        throw std::runtime_error(std::string("XGetIMValues failed: \"") + failedArg + "\"");
+    }
+    if (styles == nullptr)
+        throw std::runtime_error("XGetIMValues didn't return values for XNQueryInputStyle");
+
+    logging::myLogImpl(std::cerr, "Supported input styles (XNQueryInputStyle):", '\n');
+    std::string buffer;
+    buffer.reserve(128);
+    for (int i = 0; i < styles->count_styles; ++i)
+    {
+        if ( (styles->supported_styles[i] & XIMPreeditArea) != 0 )
+            buffer += buffer.empty() ? "XIMPreeditArea" : " | XIMPreeditArea";
+        if ( (styles->supported_styles[i] & XIMPreeditCallbacks) != 0 )
+            buffer += buffer.empty() ? "XIMPreeditCallbacks" : " | XIMPreeditCallbacks";
+        if ( (styles->supported_styles[i] & XIMPreeditPosition) != 0 )
+            buffer += buffer.empty() ? "XIMPreeditPosition" : " | XIMPreeditPosition";
+        if ( (styles->supported_styles[i] & XIMPreeditNothing) != 0 )
+            buffer += buffer.empty() ? "XIMPreeditNothing" : " | XIMPreeditNothing";
+        if ( (styles->supported_styles[i] & XIMPreeditNone) != 0 )
+            buffer += buffer.empty() ? "XIMPreeditNone" : " | XIMPreeditNone";
+        if ( (styles->supported_styles[i] & XIMStatusArea) != 0 )
+            buffer += buffer.empty() ? "XIMStatusArea" : " | XIMStatusArea";
+        if ( (styles->supported_styles[i] & XIMStatusCallbacks) != 0 )
+            buffer += buffer.empty() ? "XIMStatusCallbacks" : " | XIMStatusCallbacks";
+        if ( (styles->supported_styles[i] & XIMStatusNothing) != 0 )
+            buffer += buffer.empty() ? "XIMStatusNothing" : " | XIMStatusNothing";
+        if ( (styles->supported_styles[i] & XIMStatusNone) != 0 )
+            buffer += buffer.empty() ? "XIMStatusNone" : " | XIMStatusNone";
+
+        logging::myLogImpl(std::cerr, "    ", buffer, " (", styles->supported_styles[i], ')', '\n');
+        buffer.clear();
+    }
+
+    return {std::move(styles), [](auto& st) { if (st != nullptr) XFree(st); } };
+}
 
 // Returns the maximum size of the preedit string
 static int preeditStartCallback(XIC ic, XPointer client_data, XPointer call_data)

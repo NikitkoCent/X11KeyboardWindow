@@ -135,6 +135,9 @@ struct InputMethodText
 };
 
 
+[[maybe_unused]] static void moveImCandidatesWindow(XIC imContext, XPoint newLocation);
+
+
 int main()
 {
     try
@@ -557,4 +560,23 @@ InputMethodText InputMethodText::obtainFrom(XIC imContext, XKeyPressedEvent& kpE
         default:
             throw std::runtime_error("Xutf8LookupString: unknown status: " + std::to_string(status));
     }
+}
+
+
+static void moveImCandidatesWindow(XIC imContext, XPoint newLocation)
+{
+    const XRAIIWrapper<XVaNestedList> newLocationAttr{
+        MY_LOG_X11_CALL(XVaCreateNestedList(0, XNSpotLocation, &newLocation, nullptr)),
+        [](auto list) { if (list != nullptr) MY_LOG_X11_CALL_VALUELESS(XFree(list)); }
+    };
+
+    if (newLocationAttr == nullptr)
+        return;
+
+    MY_LOG_X11_CALL(XSetICValues(
+        imContext,
+        XNPreeditAttributes,
+        static_cast<XVaNestedList>(newLocationAttr.getResource()),
+        nullptr
+    ));
 }

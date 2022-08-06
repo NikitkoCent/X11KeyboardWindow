@@ -120,11 +120,6 @@ std::string XModifiersStateToString(decltype(XKeyEvent::state) state);
 
 XRAIIWrapper<XIMStyles*> obtainSupportedInputStyles(XIM inputMethod) noexcept(false);
 
-// Returns the maximum size of the preedit string
-static int preeditStartCallback(XIC ic, XPointer client_data, XPointer call_data);
-static void preeditDoneCallback(XIC ic, XPointer client_data, XPointer call_data);
-static void preeditDrawCallback(XIC ic, XPointer client_data, XIMPreeditDrawCallbackStruct *call_data);
-static void preeditCaretCallback(XIC ic, XPointer client_data, XIMPreeditCaretCallbackStruct *call_data);
 
 struct InputMethodText
 {
@@ -204,26 +199,6 @@ int main()
 
         [[maybe_unused]] const XRAIIWrapper supportedInputStyles = obtainSupportedInputStyles(inputMethod);
 
-        // Setup preedit callbacks
-        XIMCallback preeditCallbacks[] = {
-            { nullptr, reinterpret_cast<XIMProc>((void*)&preeditStartCallback) },
-            { nullptr, reinterpret_cast<XIMProc>(&preeditDoneCallback) },
-            { nullptr, reinterpret_cast<XIMProc>(&preeditDrawCallback) },
-            { nullptr, reinterpret_cast<XIMProc>(&preeditCaretCallback) },
-        };
-        const XRAIIWrapper<XVaNestedList> preeditAttributes{
-            MY_LOG_X11_CALL(XVaCreateNestedList(0,
-                XNPreeditStartCallback, &preeditCallbacks[0],
-                XNPreeditDoneCallback, &preeditCallbacks[1],
-                XNPreeditDrawCallback, &preeditCallbacks[2],
-                XNPreeditCaretCallback, &preeditCallbacks[3],
-                nullptr
-            )),
-            [](auto& list) { if (list != nullptr) MY_LOG_X11_CALL_VALUELESS(XFree(list)); }
-        };
-        if (preeditAttributes == nullptr)
-            throw std::runtime_error("XVaCreateNestedList failed");
-
         // Initialize input context.
         // See
         //   * https://www.x.org/releases/X11R7.6/doc/libX11/specs/libX11/libX11.html#Input_Context_Values;
@@ -232,8 +207,7 @@ int main()
         const XRAIIWrapper<XIC> imContext{
             MY_LOG_X11_CALL(XCreateIC(
                 inputMethod,
-                XNInputStyle, XIMPreeditCallbacks | XIMStatusNothing,
-                XNPreeditAttributes, preeditAttributes.getResource(),
+                XNInputStyle, XIMPreeditNothing | XIMStatusNothing,
                 XNClientWindow, static_cast<Window>(window.getResource()),
                 nullptr
             )),
@@ -250,6 +224,8 @@ int main()
 
         MY_LOG("Starting the event loop...");
 
+        XPoint imCandidatesPosition = {-1, -1};
+
         // The event loop
         // https://tronche.com/gui/x/xlib/event-handling/
         bool shouldExit = false;
@@ -265,7 +241,25 @@ int main()
             logging::logX11Event(event, eventWasFiltered);
 
             if (eventWasFiltered)
+            {
+                // Let's move the candidates window on each KeyPress eaten by IM
+                if (event.type == KeyPress)
+                {
+                    ++imCandidatesPosition.x;
+                    ++imCandidatesPosition.y;
+
+                    logging::myLogImpl(std::cerr,"Moving IM candidates window to (",
+                                       imCandidatesPosition.x, ", ", imCandidatesPosition.y, ")...", '\n');
+
+                    // It shouldn't work by the X specification:
+                    //  "When XNSpotLocation is specified to any input method other than XIMPreeditPosition, this XIC value is ignored."
+                    //
+                    // But actually it works at least on Ubuntu 20.04 + iBus (Intelligent Pinyin)
+                    moveImCandidatesWindow(imContext, imCandidatesPosition);
+                }
+
                 continue;
+            }
 
             switch (event.type)
             {
@@ -678,32 +672,6 @@ XRAIIWrapper<XIMStyles*> obtainSupportedInputStyles(XIM inputMethod) noexcept(fa
     }
 
     return {std::move(styles), [](auto& st) { if (st != nullptr) XFree(st); } };
-}
-
-// Returns the maximum size of the preedit string
-static int preeditStartCallback(XIC ic, XPointer client_data, XPointer call_data)
-{
-    (void)ic; (void)client_data; (void)call_data;
-    MY_LOG(__func__, '(', ic, ", ", static_cast<void*>(client_data), ", ", static_cast<void*>(call_data), ')');
-    return -1;
-}
-
-static void preeditDoneCallback(XIC ic, XPointer client_data, XPointer call_data)
-{
-    (void)ic; (void)client_data; (void)call_data;
-    MY_LOG(__func__, '(', ic, ", ", static_cast<void*>(client_data), ", ", static_cast<void*>(call_data), ')');
-}
-
-static void preeditDrawCallback(XIC ic, XPointer client_data, XIMPreeditDrawCallbackStruct* call_data)
-{
-    (void)ic; (void)client_data; (void)call_data;
-    MY_LOG(__func__, '(', ic, ", ", static_cast<void*>(client_data), ", ", static_cast<void*>(call_data), ')');
-}
-
-static void preeditCaretCallback(XIC ic, XPointer client_data, XIMPreeditCaretCallbackStruct* call_data)
-{
-    (void)ic; (void)client_data; (void)call_data;
-    MY_LOG(__func__, '(', ic, ", ", static_cast<void*>(client_data), ", ", static_cast<void*>(call_data), ')');
 }
 
 

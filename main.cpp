@@ -18,6 +18,7 @@
 #include <iostream>     // std::ostream, std::cerr
 #include <optional>     // std::optional
 #include <string>       // std::string
+#include <string_view>  // std::string_view
 #include <clocale>      // std::setlocale
 #include <exception>    // std::exception
 #include <sstream>      // std::ostringstream
@@ -120,11 +121,8 @@ std::string XModifiersStateToString(decltype(XKeyEvent::state) state);
 
 XRAIIWrapper<XIMStyles*> obtainSupportedInputStyles(XIM inputMethod) noexcept(false);
 
-// Returns the maximum size of the preedit string
-static int preeditStartCallback(XIC ic, XPointer client_data, XPointer call_data);
-static void preeditDoneCallback(XIC ic, XPointer client_data, XPointer call_data);
-static void preeditDrawCallback(XIC ic, XPointer client_data, XIMPreeditDrawCallbackStruct *call_data);
-static void preeditCaretCallback(XIC ic, XPointer client_data, XIMPreeditCaretCallbackStruct *call_data);
+XRAIIWrapper<XFontSet> createIcFontset(Display* display);
+
 
 struct InputMethodText
 {
@@ -204,19 +202,16 @@ int main()
 
         [[maybe_unused]] const XRAIIWrapper supportedInputStyles = obtainSupportedInputStyles(inputMethod);
 
-        // Setup preedit callbacks
-        XIMCallback preeditCallbacks[] = {
-            { nullptr, reinterpret_cast<XIMProc>((void*)&preeditStartCallback) },
-            { nullptr, reinterpret_cast<XIMProc>(&preeditDoneCallback) },
-            { nullptr, reinterpret_cast<XIMProc>(&preeditDrawCallback) },
-            { nullptr, reinterpret_cast<XIMProc>(&preeditCaretCallback) },
-        };
+        // Attributes required for XIMPreeditPosition
+        XPoint preeditSpotLocation{0, 0};                                           // XNSpotLocation
+        XRectangle preeditClippingRegion{0, 0, 200, 100};                           // XNArea
+        XRAIIWrapper<XFontSet> preeditAndStatusFontset = createIcFontset(display);  // XNFontSet
+
         const XRAIIWrapper<XVaNestedList> preeditAttributes{
             MY_LOG_X11_CALL(XVaCreateNestedList(0,
-                XNPreeditStartCallback, &preeditCallbacks[0],
-                XNPreeditDoneCallback, &preeditCallbacks[1],
-                XNPreeditDrawCallback, &preeditCallbacks[2],
-                XNPreeditCaretCallback, &preeditCallbacks[3],
+                XNSpotLocation, &preeditSpotLocation,
+                XNArea, &preeditClippingRegion,
+                XNFontSet, preeditAndStatusFontset.getResource(),
                 nullptr
             )),
             [](auto& list) { if (list != nullptr) MY_LOG_X11_CALL_VALUELESS(XFree(list)); }
@@ -232,7 +227,7 @@ int main()
         const XRAIIWrapper<XIC> imContext{
             MY_LOG_X11_CALL(XCreateIC(
                 inputMethod,
-                XNInputStyle, XIMPreeditCallbacks | XIMStatusNothing,
+                XNInputStyle, XIMPreeditPosition | XIMStatusNothing,
                 XNPreeditAttributes, preeditAttributes.getResource(),
                 XNClientWindow, static_cast<Window>(window.getResource()),
                 nullptr
@@ -265,7 +260,15 @@ int main()
             logging::logX11Event(event, eventWasFiltered);
 
             if (eventWasFiltered)
+            {
+                if (event.type == KeyPress)
+                {
+                    ++preeditSpotLocation.x;
+                    moveImCandidatesWindow(imContext, preeditSpotLocation);
+                }
+
                 continue;
+            }
 
             switch (event.type)
             {
@@ -680,30 +683,52 @@ XRAIIWrapper<XIMStyles*> obtainSupportedInputStyles(XIM inputMethod) noexcept(fa
     return {std::move(styles), [](auto& st) { if (st != nullptr) XFree(st); } };
 }
 
-// Returns the maximum size of the preedit string
-static int preeditStartCallback(XIC ic, XPointer client_data, XPointer call_data)
-{
-    (void)ic; (void)client_data; (void)call_data;
-    MY_LOG(__func__, '(', ic, ", ", static_cast<void*>(client_data), ", ", static_cast<void*>(call_data), ')');
-    return -1;
-}
 
-static void preeditDoneCallback(XIC ic, XPointer client_data, XPointer call_data)
+XRAIIWrapper<XFontSet> createIcFontset(Display* const display)
 {
-    (void)ic; (void)client_data; (void)call_data;
-    MY_LOG(__func__, '(', ic, ", ", static_cast<void*>(client_data), ", ", static_cast<void*>(call_data), ')');
-}
+    char** missingCharsets = nullptr;
+    int missingCharsetsCount = 0;
+    char* defStringReturn = nullptr;
 
-static void preeditDrawCallback(XIC ic, XPointer client_data, XIMPreeditDrawCallbackStruct* call_data)
-{
-    (void)ic; (void)client_data; (void)call_data;
-    MY_LOG(__func__, '(', ic, ", ", static_cast<void*>(client_data), ", ", static_cast<void*>(call_data), ')');
-}
+    XRAIIWrapper<XFontSet> result{
+        MY_LOG_X11_CALL(XCreateFontSet(
+            display,
+            "-*-*-*-R-Normal--*-180-100-100-*-*",
+            &missingCharsets,
+            &missingCharsetsCount,
+            &defStringReturn
+        )),
+        [display](auto& fontset) { if (fontset != nullptr) MY_LOG_X11_CALL_VALUELESS(XFreeFontSet(display, fontset)); }
+    };
 
-static void preeditCaretCallback(XIC ic, XPointer client_data, XIMPreeditCaretCallbackStruct* call_data)
-{
-    (void)ic; (void)client_data; (void)call_data;
-    MY_LOG(__func__, '(', ic, ", ", static_cast<void*>(client_data), ", ", static_cast<void*>(call_data), ')');
+    if (missingCharsetsCount > 0)
+    {
+        std::string buf;
+        buf.reserve(1024);
+
+        for (int i = 0; i < missingCharsetsCount; ++i)
+        {
+            buf += "\n    \"";
+            buf += missingCharsets[i];
+            buf += "\"";
+        }
+
+        MY_LOG("Missing charsets: ", buf);
+    }
+
+    if ( (defStringReturn != nullptr) && (std::string_view("").compare(defStringReturn) != 0) )
+    {
+        MY_LOG("A \"string drawn for missing charsets\": \"", defStringReturn, "\"");
+    }
+
+    if (missingCharsets != nullptr)
+    {
+        MY_LOG_X11_CALL_VALUELESS(XFreeStringList(missingCharsets));
+        missingCharsets = nullptr;
+        missingCharsetsCount = 0;
+    }
+
+    return result;
 }
 
 

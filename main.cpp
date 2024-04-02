@@ -1,4 +1,4 @@
-// Copyright 2022 Nikita Provotorov
+// Copyright 2022-2024 Nikita Provotorov
 //
 //  Licensed under the Apache License, Version 2.0 (the "License");
 //  you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@
 #include <clocale>      // std::setlocale
 #include <exception>    // std::exception
 #include <sstream>      // std::ostringstream
+#include <iomanip>      // std::setbase
 #include <functional>   // std::function
 #include <utility>      // std::move, std::forward
 #include <type_traits>  // std::is_trivially_destructible_v
@@ -49,8 +50,7 @@ namespace logging
         MY_LOG("    ...finished.");                                     \
     }()
 
-    void logX11Event(const XKeyEvent& event);
-    void logX11Event(const XButtonEvent& event);
+    void logX11Event(const XEvent& event, bool isFilteredOut);
 }
 
 
@@ -261,6 +261,9 @@ int main()
             // XFilterEvent returns True when some input method has filtered the event,
             //   and the client should discard the event.
             [[maybe_unused]] const bool eventWasFiltered = MY_LOG_X11_CALL(XFilterEvent(&event, None));
+
+            logging::logX11Event(event, eventWasFiltered);
+
             if (eventWasFiltered)
                 continue;
 
@@ -268,7 +271,6 @@ int main()
             {
                 case ClientMessage:
                 {
-                    MY_LOG("ClientMessage EVENT");
                     if (static_cast<Atom>(event.xclient.data.l[0]) == wmDeleteMessage)
                     {
                         MY_LOG("wmDeleteMessage received. Exit the event loop...");
@@ -278,42 +280,32 @@ int main()
                 }
                 case KeymapNotify:
                 {
-                    MY_LOG("KeymapNotify EVENT");
                     break;
                 }
                 // https://tronche.com/gui/x/xlib/events/keyboard-pointer/keyboard-pointer.html
                 // https://tronche.com/gui/x/xlib/input/keyboard-encoding.html
                 case KeyPress:
                 {
-                    MY_LOG("KeyPress EVENT");
-                    logging::logX11Event(event.xkey);
-
                     const auto [keySym, composedTextUtf8] =
                         InputMethodText::obtainFrom(imContext.getResource(), event.xkey);
 
                     if (keySym.has_value())
-                        logging::myLogImpl(std::cerr, "    keySym: ", *keySym, "\n");
+                        logging::myLogImpl(std::cerr, "               keySym: ", *keySym, "\n");
                     if (composedTextUtf8.has_value())
-                        logging::myLogImpl(std::cerr, "    composedText (UTF8): \"", *composedTextUtf8, "\"", "\n");
+                        logging::myLogImpl(std::cerr, "  composedText (UTF8): \"", *composedTextUtf8, "\"", "\n");
 
                     break;
                 }
                 case KeyRelease:
                 {
-                    MY_LOG("KeyRelease EVENT");
-                    logging::logX11Event(event.xkey);
                     break;
                 }
                 case ButtonPress:
                 {
-                    MY_LOG("ButtonPress EVENT");
-                    logging::logX11Event(event.xbutton);
                     break;
                 }
                 case ButtonRelease:
                 {
-                    MY_LOG("ButtonRelease EVENT");
-                    logging::logX11Event(event.xbutton);
                     break;
                 }
             }
@@ -357,6 +349,206 @@ namespace logging
         return logStream << strStream.str();
     }
 
+
+    void logX11Event(const XClientMessageEvent& event);
+    void logX11Event(const XKeyEvent& event);
+    void logX11Event(const XButtonEvent& event);
+
+    void logX11Event(const XEvent& event, bool isFilteredOut)
+    {
+        const std::string_view prefix = isFilteredOut ? "Filtered " : "";
+        std::string_view eventNameForUndetailedLogging;
+
+        switch (event.type)
+        {
+            default:
+                MY_LOG(prefix, "UNKOWN (", event.type, " ) EVENT");
+                return;
+            case ClientMessage:
+                MY_LOG(prefix, "ClientMessage EVENT");
+                logX11Event(event.xclient);
+                return;
+            case KeyPress:
+                MY_LOG(prefix, "KeyPress EVENT");
+                logX11Event(event.xkey);
+                return;
+            case KeyRelease:
+                MY_LOG(prefix, "KeyRelease EVENT");
+                logX11Event(event.xkey);
+                return;
+            case ButtonPress:
+                MY_LOG(prefix, "ButtonPress EVENT");
+                logX11Event(event.xbutton);
+                return;
+            case ButtonRelease:
+                MY_LOG(prefix, "ButtonRelease EVENT");
+                logX11Event(event.xbutton);
+                return;
+            case KeymapNotify:
+                eventNameForUndetailedLogging = "KeymapNotify";
+                break;
+            case MotionNotify:
+                eventNameForUndetailedLogging = "MotionNotify";
+                break;
+            case EnterNotify:
+                eventNameForUndetailedLogging = "EnterNotify";
+                break;
+            case LeaveNotify:
+                eventNameForUndetailedLogging = "LeaveNotify";
+                break;
+            case FocusIn:
+                eventNameForUndetailedLogging = "FocusIn";
+                break;
+            case FocusOut:
+                eventNameForUndetailedLogging = "FocusOut";
+                break;
+            case Expose:
+                eventNameForUndetailedLogging = "Expose";
+                break;
+            case GraphicsExpose:
+                eventNameForUndetailedLogging = "GraphicsExpose";
+                break;
+            case NoExpose:
+                eventNameForUndetailedLogging = "NoExpose";
+                break;
+            case VisibilityNotify:
+                eventNameForUndetailedLogging = "VisibilityNotify";
+                break;
+            case CreateNotify:
+                eventNameForUndetailedLogging = "CreateNotify";
+                break;
+            case DestroyNotify:
+                eventNameForUndetailedLogging = "DestroyNotify";
+                break;
+            case UnmapNotify:
+                eventNameForUndetailedLogging = "UnmapNotify";
+                break;
+            case MapNotify:
+                eventNameForUndetailedLogging = "MapNotify";
+                break;
+            case MapRequest:
+                eventNameForUndetailedLogging = "MapRequest";
+                break;
+            case ReparentNotify:
+                eventNameForUndetailedLogging = "ReparentNotify";
+                break;
+            case ConfigureNotify:
+                eventNameForUndetailedLogging = "ConfigureNotify";
+                break;
+            case ConfigureRequest:
+                eventNameForUndetailedLogging = "ConfigureRequest";
+                break;
+            case GravityNotify:
+                eventNameForUndetailedLogging = "GravityNotify";
+                break;
+            case ResizeRequest:
+                eventNameForUndetailedLogging = "ResizeRequest";
+                break;
+            case CirculateNotify:
+                eventNameForUndetailedLogging = "CirculateNotify";
+                break;
+            case CirculateRequest:
+                eventNameForUndetailedLogging = "CirculateRequest";
+                break;
+            case PropertyNotify:
+                eventNameForUndetailedLogging = "PropertyNotify";
+                break;
+            case SelectionClear:
+                eventNameForUndetailedLogging = "SelectionClear";
+                break;
+            case SelectionRequest:
+                eventNameForUndetailedLogging = "SelectionRequest";
+                break;
+            case SelectionNotify:
+                eventNameForUndetailedLogging = "SelectionNotify";
+                break;
+            case ColormapNotify:
+                eventNameForUndetailedLogging = "ColormapNotify";
+                break;
+            case MappingNotify:
+                eventNameForUndetailedLogging = "MappingNotify";
+                break;
+            case GenericEvent:
+                eventNameForUndetailedLogging = "GenericEvent";
+                break;
+        }
+
+        MY_LOG(prefix, eventNameForUndetailedLogging, " EVENT");
+    }
+
+    void logX11Event(const XClientMessageEvent& event)
+    {
+        std::string msgTypeStr;
+        if (event.message_type != None)
+        {
+            if (char* const atomStr = XGetAtomName(event.display, event.message_type); atomStr != nullptr)
+            {
+                msgTypeStr = atomStr;
+                XFree(atomStr);
+            }
+        }
+
+        const auto dataToStr = [](const auto format, const auto& data) -> std::string {
+            std::ostringstream result;
+            result << std::setbase(16);
+
+            const auto joinInts = [&result](const auto& intsRange) -> void {
+                auto currentIter = std::begin(intsRange);
+                const auto endIter = std::end(intsRange);
+
+                if (currentIter == endIter) return;
+
+                constexpr std::string_view prefix = "0x";
+
+                auto first = *currentIter++;
+                using UnsignedType = std::make_unsigned_t<decltype(first)>;
+                using OutputType = unsigned long long;
+
+                result << prefix << OutputType{ static_cast<UnsignedType>(first) };
+                while (currentIter != endIter)
+                {
+                    result << ", " << prefix << OutputType{ static_cast<UnsignedType>(*currentIter++) };
+                }
+            };
+
+            switch (format)
+            {
+                case 8:
+                    result << '[';
+                    joinInts(data.b);
+                    result << ']';
+                    break;
+                case 16:
+                    result << '[';
+                    joinInts(data.s);
+                    result << ']';
+                    break;
+                case 32:
+                    result << '[';
+                    joinInts(data.l);
+                    result << ']';
+                    break;
+                default:
+                    result << "<unknown format>";
+                    break;
+            }
+
+            return result.str();
+        };
+
+        myLogImpl(std::cerr, "event@", &event, ": \n",
+                             "                 type: ", event.type, " (ClientMessage)", "\n",
+                             "               serial: ", event.serial, "\n",
+                             "           send_event: ", event.send_event ? "true" : "false", "\n",
+                             "              display: ", event.display, "\n",
+                             "               window: ", event.window, "\n",
+                             "         message_type: ", event.message_type, " (\"", msgTypeStr, "\")", "\n",
+                             "               format: ", event.format, "\n",
+                             "                 data: ", dataToStr(event.format, event.data),
+                             "\n"
+        );
+    }
+
     void logX11Event(const XKeyEvent& event)
     {
         const auto eventTypeStr = (event.type == KeyPress) ? "KeyPress"
@@ -364,21 +556,21 @@ namespace logging
                                    : "<Unknown>";
 
         myLogImpl(std::cerr, "event@", &event, ": \n",
-                             "         type: ", eventTypeStr, " (", event.type, ")", "\n",
-                             "       serial: ", event.serial, "\n",
-                             "   send_event: ", event.send_event ? "true" : "false", "\n",
-                             "      display: ", event.display, "\n",
-                             "       window: ", event.window, "\n",
-                             "         root: ", event.root, "\n",
-                             "    subwindow: ", event.subwindow, "\n",
-                             "         time: ", event.time, " ms.", "\n",
-                             "            x: ", event.x, "\n",
-                             "            y: ", event.y, "\n",
-                             "       x_root: ", event.x_root, "\n",
-                             "       y_root: ", event.y_root, "\n",
-                             "        state: ", event.state, " (", XModifiersStateToString(event.state), ")", "\n",
-                             "      keycode: ", event.keycode, "\n",
-                             "  same_screen: ", event.same_screen ? "true" : "false",
+                             "                 type: ", eventTypeStr, " (", event.type, ")", "\n",
+                             "               serial: ", event.serial, "\n",
+                             "           send_event: ", event.send_event ? "true" : "false", "\n",
+                             "              display: ", event.display, "\n",
+                             "               window: ", event.window, "\n",
+                             "                 root: ", event.root, "\n",
+                             "            subwindow: ", event.subwindow, "\n",
+                             "                 time: ", event.time, " ms.", "\n",
+                             "                    x: ", event.x, "\n",
+                             "                    y: ", event.y, "\n",
+                             "               x_root: ", event.x_root, "\n",
+                             "               y_root: ", event.y_root, "\n",
+                             "                state: ", event.state, " (", XModifiersStateToString(event.state), ")", "\n",
+                             "              keycode: ", event.keycode, "\n",
+                             "          same_screen: ", event.same_screen ? "true" : "false",
                              "\n"
         );
     }
@@ -390,21 +582,21 @@ namespace logging
                                    : "<Unknown>";
 
         myLogImpl(std::cerr, "event@", &event, ": \n",
-                             "         type: ", eventTypeStr, " (", event.type, ")", "\n",
-                             "       serial: ", event.serial, "\n",
-                             "   send_event: ", event.send_event ? "true" : "false", "\n",
-                             "      display: ", event.display, "\n",
-                             "       window: ", event.window, "\n",
-                             "         root: ", event.root, "\n",
-                             "    subwindow: ", event.subwindow, "\n",
-                             "         time: ", event.time, " ms.", "\n",
-                             "            x: ", event.x, "\n",
-                             "            y: ", event.y, "\n",
-                             "       x_root: ", event.x_root, "\n",
-                             "       y_root: ", event.y_root, "\n",
-                             "        state: ", event.state, " (", XModifiersStateToString(event.state), ")", "\n",
-                             "       button: ", event.button, "\n",
-                             "  same_screen: ", event.same_screen ? "true" : "false",
+                             "                 type: ", eventTypeStr, " (", event.type, ")", "\n",
+                             "               serial: ", event.serial, "\n",
+                             "           send_event: ", event.send_event ? "true" : "false", "\n",
+                             "              display: ", event.display, "\n",
+                             "               window: ", event.window, "\n",
+                             "                 root: ", event.root, "\n",
+                             "            subwindow: ", event.subwindow, "\n",
+                             "                 time: ", event.time, " ms.", "\n",
+                             "                    x: ", event.x, "\n",
+                             "                    y: ", event.y, "\n",
+                             "               x_root: ", event.x_root, "\n",
+                             "               y_root: ", event.y_root, "\n",
+                             "                state: ", event.state, " (", XModifiersStateToString(event.state), ")", "\n",
+                             "               button: ", event.button, "\n",
+                             "          same_screen: ", event.same_screen ? "true" : "false",
                              "\n"
         );
     }
